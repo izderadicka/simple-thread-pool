@@ -3,13 +3,16 @@
 #[macro_use]
 extern crate quick_error;
 extern crate num_cpus;
+extern crate boxfnonce;
 
 use std::sync::{Arc,Mutex, Condvar};
 use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
 use std::collections::VecDeque;
-use std::boxed::FnBox;
+//TODO - fix later when boxing of FnOnce is resolved
+//use std::boxed::FnBox;   
 use std::thread::{Builder as ThreadBuilder};
 use std::time::{Duration};
+use boxfnonce::{SendBoxFnOnce};
 
 
 quick_error! {
@@ -38,6 +41,7 @@ impl <T> Clone for Queue<T> {
 }
 
 impl <T> Queue<T> {
+    #[allow(dead_code)]
     fn new() -> Self {
         Queue {
             items: Arc::new(Mutex::new(VecDeque::new())),
@@ -96,7 +100,7 @@ impl <T> Queue<T> {
 
 enum Message {
     End,
-    Run(Box<FnBox() -> () + Send + 'static>)
+    Run(SendBoxFnOnce<'static,()>)
 }
 
 #[derive(Clone)]
@@ -212,7 +216,7 @@ impl Worker {
                    match msg {
                Message::End => break,
                Message::Run(f) => {
-                 f();
+                 f.call();
                  self.pool.active.fetch_sub(1, Ordering::SeqCst);
                }
                }
@@ -283,7 +287,7 @@ impl Pool {
         }
         }
         self.state.active.fetch_add(1, Ordering::SeqCst);
-        self.queue.put(Message::Run(Box::new(f)));
+        self.queue.put(Message::Run(SendBoxFnOnce::new(f)));
         Ok(())
     }
     // TODO
