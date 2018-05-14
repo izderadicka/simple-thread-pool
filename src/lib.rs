@@ -111,6 +111,10 @@ struct Worker
 
 }
 
+struct WorkerCleanup<'a> {
+    pool: &'a PoolState
+}
+
 #[derive(Clone)]
 pub struct Pool {
     queue: Queue<Message>,
@@ -205,12 +209,11 @@ impl Builder {
 }
 
 
-
-
 impl Worker {
    fn run(&mut self) {
-       #[allow(while_true)]
-       while true {
+      
+       let cleanup = WorkerCleanup::from_pool( &self.pool);
+       loop {
            match self.queue.get() {
                Some(msg) => {
                    match msg {
@@ -231,9 +234,24 @@ impl Worker {
            }
           
        }
-       {
-        let mut terminated = self.pool.terminated.lock().unwrap();
-        let mut workers = self.pool.workers.lock().unwrap();
+       drop(cleanup)
+   }
+}
+
+impl <'a> WorkerCleanup<'a> {
+    fn from_pool(p: &'a PoolState) -> Self {
+        WorkerCleanup {
+            pool:p
+        }
+    }
+}
+
+// We need to clean up terminated worker - even in case of panic 
+impl <'a> Drop for WorkerCleanup<'a> {
+    fn drop(&mut self) {
+        // we can do something only when mutex is OK otherwise it's undefined
+        if let Ok(mut terminated) = self.pool.terminated.lock() {
+        if let Ok(mut workers) = self.pool.workers.lock() {
         *workers-=1;
         if self.pool.terminating.load(Ordering::SeqCst) &&
             *workers == 0 {
@@ -242,8 +260,10 @@ impl Worker {
             self.pool.cond_terminated.notify_all();
         }
        }
-   }
-}
+    }
+    }
+    }
+
 
 impl Pool {
 
@@ -439,6 +459,46 @@ mod tests {
     pool.join();
     assert_eq!(4, x.load(Ordering::SeqCst));
 
+    }
+
+    #[test]
+    fn test_workers_recreation() {
+        let mut pool = Builder::new()
+            .set_max_queue(20)
+            .set_min_threads(4)
+            .set_max_threads(8)
+            .set_thread_idle_time(Duration::from_millis(500))
+            .build();
+
+        for _i in 0..2 {
+            pool.spawn(|| panic!("in the streets of London")).unwrap()
+        }
+
+        sleep(Duration::from_millis(100));
+        {
+            let num_workers = pool.state.workers.lock().unwrap();
+            assert_eq!(2, *num_workers )
+        }
+
+        for _i in 0..2 {
+            pool.spawn(|| {println!("panic in the streets of birnigham")}).unwrap()
+        }
+
+        sleep(Duration::from_millis(100));
+        {
+            let num_workers = pool.state.workers.lock().unwrap();
+            assert_eq!(4, *num_workers )
+        }
+
+        for _i in 0..2 {
+            pool.spawn(|| {println!("hang up the Dj")}).unwrap()
+        }
+
+        sleep(Duration::from_millis(100));
+        {
+            let num_workers = pool.state.workers.lock().unwrap();
+            assert_eq!(4, *num_workers )
+        }
     }
 
 
