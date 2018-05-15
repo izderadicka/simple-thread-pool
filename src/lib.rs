@@ -1,5 +1,3 @@
-#![feature(fnbox)]
-
 #[macro_use]
 extern crate quick_error;
 extern crate boxfnonce;
