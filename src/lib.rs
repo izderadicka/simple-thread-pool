@@ -2,18 +2,17 @@
 
 #[macro_use]
 extern crate quick_error;
-extern crate num_cpus;
 extern crate boxfnonce;
+extern crate num_cpus;
 
-use std::sync::{Arc,Mutex, Condvar};
-use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 //TODO - fix later when boxing of FnOnce is resolved
-//use std::boxed::FnBox;   
-use std::thread::{Builder as ThreadBuilder};
-use std::time::{Duration};
-use boxfnonce::{SendBoxFnOnce};
-
+//use std::boxed::FnBox;
+use boxfnonce::SendBoxFnOnce;
+use std::thread::Builder as ThreadBuilder;
+use std::time::Duration;
 
 quick_error! {
     #[derive(Debug, PartialEq, Eq)]
@@ -23,30 +22,29 @@ quick_error! {
     }
 }
 
-
 struct Queue<T> {
     items: Arc<Mutex<VecDeque<T>>>,
     cond: Arc<Condvar>,
-    timeout: Option<Duration>
+    timeout: Option<Duration>,
 }
 
-impl <T> Clone for Queue<T> {
+impl<T> Clone for Queue<T> {
     fn clone(&self) -> Self {
         Queue {
             items: self.items.clone(),
             cond: self.cond.clone(),
-            timeout: self.timeout
+            timeout: self.timeout,
         }
     }
 }
 
-impl <T> Queue<T> {
+impl<T> Queue<T> {
     #[allow(dead_code)]
     fn new() -> Self {
         Queue {
             items: Arc::new(Mutex::new(VecDeque::new())),
             cond: Arc::new(Condvar::new()),
-            timeout: None
+            timeout: None,
         }
     }
 
@@ -54,36 +52,34 @@ impl <T> Queue<T> {
         Queue {
             items: Arc::new(Mutex::new(VecDeque::new())),
             cond: Arc::new(Condvar::new()),
-            timeout: Some(timeout)
+            timeout: Some(timeout),
         }
     }
 
-    fn put(&mut self, m:T) {
+    fn put(&mut self, m: T) {
         let mut unlocked_items = self.items.lock().unwrap();
         unlocked_items.push_front(m);
         self.cond.notify_one()
-
     }
 
     fn get(&mut self) -> Option<T> {
         let mut unlocked_items = self.items.lock().unwrap();
         #[allow(while_true)]
-        // todo - later check for wait spurious breaks, now it's not so bit issue 
+        // todo - later check for wait spurious breaks, now it's not so bit issue
         // let wait_until = match self.timeout_millis {
         //     None => Instant::now(),
         //     Some(to) => Instant::now() + Duration::from_millis(to)
         // };
         while true {
-            if let Some(item) = unlocked_items.pop_back()  {
-                return Some(item)
+            if let Some(item) = unlocked_items.pop_back() {
+                return Some(item);
             }
             unlocked_items = match self.timeout {
                 None => self.cond.wait(unlocked_items).unwrap(),
                 Some(to) => {
-                    let res = self.cond.wait_timeout(unlocked_items, 
-                    to).unwrap();
+                    let res = self.cond.wait_timeout(unlocked_items, to).unwrap();
                     if res.1.timed_out() {
-                        return None
+                        return None;
                     }
                     res.0
                 }
@@ -97,29 +93,26 @@ impl <T> Queue<T> {
     }
 }
 
-
 enum Message {
     End,
-    Run(SendBoxFnOnce<'static,()>)
+    Run(SendBoxFnOnce<'static, ()>),
 }
 
 #[derive(Clone)]
-struct Worker 
-{
+struct Worker {
     queue: Queue<Message>,
-    pool: Arc<PoolState>
-
+    pool: Arc<PoolState>,
 }
 
 struct WorkerCleanup<'a> {
-    pool: &'a PoolState
+    pool: &'a PoolState,
 }
 
 #[derive(Clone)]
 pub struct Pool {
     queue: Queue<Message>,
     state: Arc<PoolState>,
-    params: PoolParams
+    params: PoolParams,
 }
 
 struct PoolState {
@@ -136,7 +129,7 @@ struct PoolState {
 struct PoolParams {
     max_threads: usize,
     max_queue: usize,
-    thread_idle_time: Duration
+    thread_idle_time: Duration,
 }
 
 #[derive(Debug)]
@@ -144,7 +137,7 @@ pub struct Builder {
     min_threads: usize,
     max_threads: usize,
     max_queue: usize,
-    thread_idle_time: Duration
+    thread_idle_time: Duration,
 }
 const DEFAULT_MAX_QUEUE: usize = 100;
 const DEFAULT_THREAD_IDLE_TIME: Duration = Duration::from_secs(60);
@@ -154,23 +147,23 @@ impl Builder {
         let machine_cpus = num_cpus::get();
         Builder {
             min_threads: machine_cpus,
-            max_threads: machine_cpus*2,
+            max_threads: machine_cpus * 2,
             max_queue: DEFAULT_MAX_QUEUE,
-            thread_idle_time: DEFAULT_THREAD_IDLE_TIME 
+            thread_idle_time: DEFAULT_THREAD_IDLE_TIME,
         }
     }
 
-    pub fn set_min_threads(&mut self, min_threads:usize) -> &mut Self {
+    pub fn set_min_threads(&mut self, min_threads: usize) -> &mut Self {
         self.min_threads = min_threads;
         self
     }
 
-    pub fn set_max_threads(&mut self, max_threads:usize) -> &mut Self {
+    pub fn set_max_threads(&mut self, max_threads: usize) -> &mut Self {
         self.max_threads = max_threads;
         self
     }
 
-    pub fn set_max_queue(&mut self, max_queue:usize) -> &mut Self {
+    pub fn set_max_queue(&mut self, max_queue: usize) -> &mut Self {
         self.max_queue = max_queue;
         self
     }
@@ -183,7 +176,7 @@ impl Builder {
     pub fn build(&self) -> Pool {
         let pool = Pool {
             queue: Queue::with_timeout(self.thread_idle_time),
-            state: Arc::new(PoolState{
+            state: Arc::new(PoolState {
                 total_workers: AtomicUsize::new(0),
                 active: AtomicUsize::new(0),
                 workers: Mutex::new(self.min_threads),
@@ -195,80 +188,77 @@ impl Builder {
             params: PoolParams {
                 max_threads: self.max_threads,
                 max_queue: self.max_queue,
-                thread_idle_time: self.thread_idle_time
-            }
+                thread_idle_time: self.thread_idle_time,
+            },
         };
-        
-        
+
         for _i in 0..pool.state.min_threads {
-           pool.add_worker()
+            pool.add_worker()
         }
         pool
     }
-
 }
-
 
 impl Worker {
-   fn run(&mut self) {
-      
-       let cleanup = WorkerCleanup::from_pool( &self.pool);
-       loop {
-           match self.queue.get() {
-               Some(msg) => {
-                   match msg {
-               Message::End => break,
-               Message::Run(f) => {
-                 f.call();
-                 self.pool.active.fetch_sub(1, Ordering::SeqCst);
-               }
-               }
-               },
-               None => {
-                   let mut  workers = self.pool.workers.lock().unwrap();
-                   if *workers > self.pool.min_threads {
-                       *workers-=1;
-                       return
-                   }
-               }
-           }
-          
-       }
-       drop(cleanup)
-   }
-}
-
-impl <'a> WorkerCleanup<'a> {
-    fn from_pool(p: &'a PoolState) -> Self {
-        WorkerCleanup {
-            pool:p
+    fn run(&mut self) {
+        let cleanup = WorkerCleanup::from_pool(&self.pool);
+        loop {
+            match self.queue.get() {
+                Some(msg) => match msg {
+                    Message::End => break,
+                    Message::Run(f) => {
+                        f.call();
+                        self.pool.active.fetch_sub(1, Ordering::SeqCst);
+                    }
+                },
+                None => {
+                    // thread was idle for certain period
+                    if let Ok(mut workers) = self.pool.workers.lock() {
+                        if *workers > self.pool.min_threads {
+                            //TODO as this not locked with workers decrement we might get less then min
+                            return;
+                        }
+                    }
+                }
+            }
         }
+        drop(cleanup)
     }
 }
 
-// We need to clean up terminated worker - even in case of panic 
-impl <'a> Drop for WorkerCleanup<'a> {
+impl<'a> WorkerCleanup<'a> {
+    fn from_pool(p: &'a PoolState) -> Self {
+        WorkerCleanup { pool: p }
+    }
+}
+
+// We need to clean up terminated worker - even in case of panic
+impl<'a> Drop for WorkerCleanup<'a> {
     fn drop(&mut self) {
+        if std::thread::panicking() {
+            self.pool.active.fetch_sub(1, Ordering::SeqCst);
+        }
         // we can do something only when mutex is OK otherwise it's undefined
         if let Ok(mut terminated) = self.pool.terminated.lock() {
-        if let Ok(mut workers) = self.pool.workers.lock() {
-        *workers-=1;
-        if self.pool.terminating.load(Ordering::SeqCst) &&
-            *workers == 0 {
-            //No threads are running, terminated
-            *terminated = true;
-            self.pool.cond_terminated.notify_all();
+            if let Ok(mut workers) = self.pool.workers.lock() {
+                *workers -= 1;
+                if self.pool.terminating.load(Ordering::SeqCst) && *workers == 0 {
+                    //No threads are running, terminated
+                    *terminated = true;
+                    self.pool.cond_terminated.notify_all();
+                }
+            } else {
+                eprintln!("workers lock is poisoned")
+            }
+        } else {
+            eprintln!("terminated lock is poisoned")
         }
-       }
     }
-    }
-    }
-
+}
 
 impl Pool {
-
     pub fn new() -> Self {
-       Builder::new().build()
+        Builder::new().build()
     }
 
     pub fn queue_size(&self) -> usize {
@@ -276,35 +266,35 @@ impl Pool {
     }
 
     fn add_worker(&self) {
-        
         let mut w = Worker {
-        queue: self.queue.clone(),
-        pool: self.state.clone()
+            queue: self.queue.clone(),
+            pool: self.state.clone(),
         };
-        let builder = ThreadBuilder::new().name(format!("Worker {}", 
-        self.state.total_workers.fetch_add(1,Ordering::Relaxed)));
-        builder.spawn(move || {
-            w.run()
-        }).unwrap();
-        
+        let builder = ThreadBuilder::new().name(format!(
+            "Worker {}",
+            self.state.total_workers.fetch_add(1, Ordering::Relaxed)
+        ));
+        builder.spawn(move || w.run()).unwrap();
     }
 
-    pub fn spawn<F>(&mut self, f: F) -> Result<(),Error>
-    where F: FnOnce() -> () + Send + 'static
+    pub fn spawn<F>(&mut self, f: F) -> Result<(), Error>
+    where
+        F: FnOnce() -> () + Send + 'static,
     {
         if self.state.terminating.load(Ordering::SeqCst) {
-            return Err(Error::PoolIsTerminating)
+            return Err(Error::PoolIsTerminating);
         }
         if self.queue.len() >= self.params.max_queue {
-            return Err(Error::PoolIsFull)
+            return Err(Error::PoolIsFull);
         }
         {
             let mut workers_now = self.state.workers.lock().unwrap();
-            if *workers_now < self.state.min_threads || self.queue.len()> *workers_now 
-            && *workers_now < self.params.max_threads {
-            self.add_worker();
-            *workers_now+=1
-        }
+            if *workers_now < self.state.min_threads
+                || self.queue.len() > *workers_now && *workers_now < self.params.max_threads
+            {
+                self.add_worker();
+                *workers_now += 1;
+            }
         }
         self.state.active.fetch_add(1, Ordering::SeqCst);
         self.queue.put(Message::Run(SendBoxFnOnce::new(f)));
@@ -315,7 +305,7 @@ impl Pool {
 
     // }
 
-    pub fn terminate(&mut self, ) {
+    pub fn terminate(&mut self) {
         let num_workers = self.state.workers.lock().unwrap();
         self.state.terminating.store(true, Ordering::SeqCst);
         for _i in 0..*num_workers {
@@ -325,61 +315,58 @@ impl Pool {
 
     pub fn join(self) {
         let mut terminated = self.state.terminated.lock().unwrap();
-        while !*terminated  {
+        while !*terminated {
             terminated = self.state.cond_terminated.wait(terminated).unwrap()
-        } 
+        }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::thread::{sleep, self};
+    use std::thread::{self, sleep};
     use std::time::Duration;
 
     #[test]
     fn test_queue() {
-
         let q = Queue::<usize>::new();
 
         for i in 1..11 {
             let mut lc = q.clone();
-            thread::spawn( move || {
-                sleep(Duration::from_millis(i*10));
+            thread::spawn(move || {
+                sleep(Duration::from_millis(i * 10));
                 lc.put(i as usize);
-                });
+            });
         }
 
         let res: usize = (1..11)
-        .map(|_| q.clone())
-        .map(|mut qq| thread::spawn(move || {qq.get().unwrap()}))
-        .map(|j| j.join().unwrap())
-        .sum();
+            .map(|_| q.clone())
+            .map(|mut qq| thread::spawn(move || qq.get().unwrap()))
+            .map(|j| j.join().unwrap())
+            .sum();
 
         assert_eq!(55, res);
     }
 
-    
-
     #[test]
     fn it_works() {
-    
-    let x = Arc::new(AtomicUsize::new(0));
+        let x = Arc::new(AtomicUsize::new(0));
 
-    let mut p = Pool::new();
-    
-    for _i in 1..5 {
-        let c = x.clone();
-        p.spawn(move || {c.fetch_add(1, Ordering::SeqCst);}).unwrap()
-    }   
-    
-    p.terminate();
-    //sleep(Duration::from_secs(1));
-    p.join();
-    
-    //assert_eq!(0, p.state.workers.load(Ordering::SeqCst));
-    assert_eq!(4, x.load(Ordering::SeqCst));
+        let mut p = Pool::new();
+
+        for _i in 1..5 {
+            let c = x.clone();
+            p.spawn(move || {
+                c.fetch_add(1, Ordering::SeqCst);
+            }).unwrap()
+        }
+
+        p.terminate();
+        //sleep(Duration::from_secs(1));
+        p.join();
+
+        //assert_eq!(0, p.state.workers.load(Ordering::SeqCst));
+        assert_eq!(4, x.load(Ordering::SeqCst));
     }
 
     #[test]
@@ -402,7 +389,6 @@ mod tests {
 
         let res = pool.spawn(work);
         assert_eq!(Err(Error::PoolIsFull), res);
-
     }
 
     #[test]
@@ -423,7 +409,7 @@ mod tests {
         sleep(Duration::from_millis(10));
         {
             let num_workers = pool.state.workers.lock().unwrap();
-            assert_eq!(4, *num_workers )
+            assert_eq!(4, *num_workers)
         }
     }
 
@@ -446,19 +432,20 @@ mod tests {
         sleep(Duration::from_millis(1000));
         {
             let num_workers = pool.state.workers.lock().unwrap();
-            assert_eq!(2, *num_workers )
+            assert_eq!(2, *num_workers)
         }
         // now still can normally proceed
         let x = Arc::new(AtomicUsize::new(0));
         for _i in 1..5 {
-        let c = x.clone();
-        pool.spawn(move || {c.fetch_add(1, Ordering::SeqCst);}).unwrap()
-    }   
-    
-    pool.terminate();
-    pool.join();
-    assert_eq!(4, x.load(Ordering::SeqCst));
+            let c = x.clone();
+            pool.spawn(move || {
+                c.fetch_add(1, Ordering::SeqCst);
+            }).unwrap()
+        }
 
+        pool.terminate();
+        pool.join();
+        assert_eq!(4, x.load(Ordering::SeqCst));
     }
 
     #[test]
@@ -475,32 +462,32 @@ mod tests {
         }
 
         sleep(Duration::from_millis(100));
+        assert_eq!(0, pool.state.active.load(Ordering::SeqCst));
         {
             let num_workers = pool.state.workers.lock().unwrap();
-            assert_eq!(2, *num_workers )
+            assert!(2 <= *num_workers); // might get already recreated
         }
 
         for _i in 0..2 {
-            pool.spawn(|| {println!("panic in the streets of birnigham")}).unwrap()
+            pool.spawn(|| println!("panic in the streets of birnigham"))
+                .unwrap()
         }
 
         sleep(Duration::from_millis(100));
         {
             let num_workers = pool.state.workers.lock().unwrap();
-            assert_eq!(4, *num_workers )
+            assert_eq!(4, *num_workers)
         }
 
         for _i in 0..2 {
-            pool.spawn(|| {println!("hang up the Dj")}).unwrap()
+            pool.spawn(|| println!("hang up the Dj")).unwrap()
         }
 
         sleep(Duration::from_millis(100));
         {
             let num_workers = pool.state.workers.lock().unwrap();
-            assert_eq!(4, *num_workers )
+            assert_eq!(4, *num_workers)
         }
     }
 
-
 }
-
